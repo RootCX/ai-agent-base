@@ -1,7 +1,6 @@
 {
   "name": "ai_agent_base",
-  "description": "AI agent for ai_agent_base",
-  "llm": "anthropic:claude-sonnet-4-6",
+  "description": "AI agent",
   "systemPrompt": "./agent/system.md",
   "memory": { "enabled": true },
   "limits": { "maxTurns": 50, "maxContextTokens": 100000, "keepRecentMessages": 10 },

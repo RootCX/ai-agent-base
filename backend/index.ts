@@ -8,11 +8,18 @@ const write = (m: any) => process.stdout.write(JSON.stringify(m) + "\n");
 const rl = createInterface({ input: process.stdin });
 const calls = new Map<string, { resolve: (v: string) => void; timer: ReturnType<typeof setTimeout> }>();
 let credentials: Record<string, string> = {};
+let runtimeUrl = "";
+let authToken = "";
 
 rl.on("line", (l) => {
     let m: any;
     try { m = JSON.parse(l); } catch { return; }
-    if (m.type === "discover") { credentials = m.credentials ?? {}; return; }
+    if (m.type === "discover") {
+        credentials = m.credentials ?? {};
+        runtimeUrl = m.runtime_url ?? "";
+        for (const [k, v] of Object.entries(credentials)) process.env[k] = v;
+        return;
+    }
     if (m.type === "agent_tool_result") {
         const pending = calls.get(m.call_id);
         if (pending) {
@@ -27,12 +34,27 @@ rl.on("line", (l) => {
 
 write({ type: "discover", capabilities: ["agent"] });
 
+async function fetchLlmModel(modelId?: string) {
+    const res = await fetch(`${runtimeUrl}/api/v1/llm-models`, {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    if (!res.ok) throw new Error("Failed to fetch LLM models from Core");
+    const models: { id: string; provider: string; model: string; is_default: boolean }[] = await res.json();
+    if (!models.length) throw new Error("No LLM models configured. Go to AI Settings to add one.");
+    if (modelId) {
+        const match = models.find(m => m.id === modelId);
+        if (match) return match;
+    }
+    return models.find(m => m.is_default) ?? models[0];
+}
+
 async function invoke(m: any) {
     if (!m.invoke_id || !m.config || !m.message) {
         write({ type: "agent_error", invoke_id: m.invoke_id ?? "", error: "missing required fields" });
         return;
     }
 
+    authToken = m.auth_token ?? authToken;
     const maxTurns = m.config?.limits?.maxTurns ?? 50;
 
     const tools = (m.config._toolDescriptors ?? []).map((t: any) =>
@@ -50,24 +72,21 @@ async function invoke(m: any) {
         )
     );
 
-    // inject credentials as env vars so LangChain providers can find them
-    for (const [k, v] of Object.entries(credentials)) process.env[k] = v;
-
-    const llm = m.config.llm ?? "anthropic:claude-sonnet-4-6";
-    const model = await initChatModel(llm);
-
-    const agent = createAgent({
-        model,
-        tools,
-        systemPrompt: m.system_prompt,
-        middleware: [
-            modelRetryMiddleware({ maxRetries: 3, backoffFactor: 2, initialDelayMs: 1000 }),
-            modelCallLimitMiddleware({ runLimit: maxTurns }),
-            toolRetryMiddleware({ maxRetries: 3, onFailure: "continue" }),
-        ],
-    });
-
     try {
+        const llm = await fetchLlmModel(m.model_id);
+        const model = await initChatModel(`${llm.provider}:${llm.model}`);
+
+        const agent = createAgent({
+            model,
+            tools,
+            systemPrompt: m.system_prompt,
+            middleware: [
+                modelRetryMiddleware({ maxRetries: 3, backoffFactor: 2, initialDelayMs: 1000 }),
+                modelCallLimitMiddleware({ runLimit: maxTurns }),
+                toolRetryMiddleware({ maxRetries: 3, onFailure: "continue" }),
+            ],
+        });
+
         let response = "";
         const stream = await agent.stream(
             { messages: [...(m.history ?? []), { role: "user", content: m.message }] },
