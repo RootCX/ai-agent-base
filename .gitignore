@@ -1,0 +1,8 @@
+node_modules/
+dist/
+target/
+.bundle/
+.rootcx/
+src-tauri/
+*.tar.gz
+package-lock.json
