@@ -9,7 +9,9 @@ const write = (m: any) => process.stdout.write(JSON.stringify(m) + "\n");
 const rl = createInterface({ input: process.stdin });
 const calls = new Map<string, { resolve: (v: string) => void; timer: ReturnType<typeof setTimeout> }>();
 
-let agent: any = null;
+let agentConfig: { tools: any[]; systemPrompt: string; maxTurns: number } | null = null;
+let cachedModelKey = "";
+let cachedAgent: any = null;
 
 rl.on("line", (l) => {
     let m: any;
@@ -29,7 +31,7 @@ rl.on("line", (l) => {
 
 write({ type: "discover", capabilities: ["agent"] });
 
-async function boot(m: any) {
+function boot(m: any) {
     const cfg = m.agent_config;
     if (!cfg) return;
     const credentials = m.credentials ?? {};
@@ -54,37 +56,40 @@ async function boot(m: any) {
         )
     );
 
-    const maxTurns = cfg.max_turns ?? 50;
-
-    const runtimeUrl = m.runtime_url ?? "";
-    const res = await fetch(`${runtimeUrl}/api/v1/llm-models`);
-    if (!res.ok) throw new Error("Failed to fetch LLM models from Core");
-    const models: { id: string; provider: string; model: string; is_default: boolean }[] = await res.json();
-    if (!models.length) throw new Error("No LLM models configured. Go to AI Settings to add one.");
-    const llm = models.find(m => m.is_default) ?? models[0];
-    const model = await initChatModel(`${llm.provider}:${llm.model}`);
-
-    agent = createAgent({
-        model,
-        tools,
-        systemPrompt,
-        middleware: [
-            modelRetryMiddleware({ maxRetries: 3, backoffFactor: 2, initialDelayMs: 1000 }),
-            modelCallLimitMiddleware({ runLimit: maxTurns }),
-            toolRetryMiddleware({ maxRetries: 3, onFailure: "continue" }),
-        ],
-    });
+    agentConfig = { tools, systemPrompt, maxTurns: cfg.max_turns ?? 50 };
 }
 
 async function invoke(m: any) {
-    if (!agent || !m.invoke_id || !m.message) {
+    if (!agentConfig || !m.invoke_id || !m.message) {
         write({ type: "agent_error", invoke_id: m.invoke_id ?? "", error: "agent not ready or missing fields" });
         return;
     }
 
     try {
+        const llm = m.llm;
+        if (!llm) {
+            write({ type: "agent_error", invoke_id: m.invoke_id, error: "no llm model in invoke payload" });
+            return;
+        }
+
+        const modelKey = `${llm.provider}:${llm.model}`;
+        if (modelKey !== cachedModelKey || !cachedAgent) {
+            const model = await initChatModel(modelKey);
+            cachedAgent = createAgent({
+                model,
+                tools: agentConfig.tools,
+                systemPrompt: agentConfig.systemPrompt,
+                middleware: [
+                    modelRetryMiddleware({ maxRetries: 3, backoffFactor: 2, initialDelayMs: 1000 }),
+                    modelCallLimitMiddleware({ runLimit: agentConfig.maxTurns }),
+                    toolRetryMiddleware({ maxRetries: 3, onFailure: "continue" }),
+                ],
+            });
+            cachedModelKey = modelKey;
+        }
+
         let response = "";
-        const stream = await agent.stream(
+        const stream = await cachedAgent.stream(
             { messages: [...(m.history ?? []), { role: "user", content: m.message }] },
             { streamMode: "messages" as const, recursionLimit: 150, configurable: { invokeId: m.invoke_id } },
         );
