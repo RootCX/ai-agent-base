@@ -95,7 +95,7 @@ async function invoke(m: any) {
         );
         for await (const [chunk, metadata] of stream) {
             if (metadata.langgraph_node !== "model_request") continue;
-            const text = typeof chunk.content === "string" ? chunk.content : "";
+            const text = chunk.text ?? "";
             if (text) { response += text; write({ type: "agent_chunk", invoke_id: m.invoke_id, delta: text }); }
         }
         write({ type: "agent_done", invoke_id: m.invoke_id, response });
