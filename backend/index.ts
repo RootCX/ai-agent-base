@@ -1,4 +1,5 @@
 import { initChatModel } from "langchain/chat_models/universal";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { createAgent, tool, modelRetryMiddleware, modelCallLimitMiddleware, toolRetryMiddleware } from "langchain";
 import { createInterface } from "readline";
 import { readFileSync } from "fs";
@@ -148,7 +149,13 @@ async function invoke(m: any) {
 
         const modelKey = `${llm.provider}:${llm.model}`;
         if (modelKey !== cachedModelKey || !cachedAgent) {
-            const model = await initChatModel(modelKey);
+            const model = llm.provider === "rootcx"
+                ? new ChatAnthropic({
+                    model: llm.model,
+                    apiKey: process.env.ROOTCX_API_KEY,
+                    anthropicApiUrl: process.env.ROOTCX_LLM_ENDPOINT,
+                  })
+                : await initChatModel(modelKey);
             cachedAgent = createAgent({
                 model,
                 tools: agentConfig.tools,
