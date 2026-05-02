@@ -176,8 +176,10 @@ async function invoke(m: any) {
             m.invoke_id,
             (delta) => write({ type: "agent_chunk", invoke_id: m.invoke_id, delta }),
         );
+        if (!response) throw new Error("No response from AI model. Check your credits or provider configuration.");
         write({ type: "agent_done", invoke_id: m.invoke_id, response });
     } catch (e: any) {
+        console.error(`[agent] ERROR: status=${(e as any).status} message=${e.message?.slice(0, 200)}`);
         write({ type: "agent_error", invoke_id: m.invoke_id, error: e.message ?? String(e) });
     }
 }
